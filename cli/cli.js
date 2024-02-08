@@ -160,6 +160,7 @@ program.command("png2src <images...>")
     .option("--zig", "Generate Zig source (Shorthand for --lang zig)")
     .option("-t, --template <file>", "Template file with a custom output format")
     .option("-o, --output <file>", "File to write the result to", "-")
+    .option("-m, --mask", "Allow and output an alpha mask")
     .addOption(langOption)
     .action((images, opts) => {
         const png2src = require("./lib/png2src");

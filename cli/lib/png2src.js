@@ -166,7 +166,7 @@ const ALIASES = {
     cpp: "c",
 };
 
-function run(sourceFile) {
+function run(sourceFile, mask) {
     const png = pngjs.PNG.sync.read(fs.readFileSync(sourceFile), {
         colorType: 1,
         inputColorType: 1,
@@ -174,6 +174,7 @@ function run(sourceFile) {
 
     const palette = new Map();
     let colorCount = 0;
+    let hasMask = false;
     for (let y = 0; y < png.height; ++y) {
         for (let x = 0; x < png.width; ++x) {
             const idx = 4 * (png.width * y + x);
@@ -182,6 +183,12 @@ function run(sourceFile) {
             const b = png.data[idx + 2];
             const a = png.data[idx + 3];
             const packed = (r << 24) | (g << 16) | (b << 8) | a;
+
+            if (mask && !packed) {
+                hasMask = true;
+                continue;
+            }
+
             if (!palette.has(packed)) {
                 if (colorCount >= 4) {
                     const rgbHistory = [...palette.values()].map(
@@ -212,6 +219,9 @@ The first occurrence of another color is at (${x}, ${y}) and has the value of (R
             const b = rgba[2];
             const a = rgba[3];
             const packed = (r << 24) | (g << 16) | (b << 8) | a;
+            if (!packed && mask) {
+                continue;
+            }
             if (palette.has(packed)) {
                 palette.set(packed, {i: colorCount++});
             } else if (forceOrder) {
@@ -246,6 +256,7 @@ The first occurrence of another color is at (${x}, ${y}) and has the value of (R
     }
 
     const bytes = new Uint8Array(png.width * png.height * bpp / 8);
+    const maskBytes = new Uint8Array(png.width * png.height / 8);
 
     // Read a color (palette index) from the source png
     function readColor(x, y) {
@@ -255,7 +266,10 @@ The first occurrence of another color is at (${x}, ${y}) and has the value of (R
         const b = png.data[idx + 2];
         const a = png.data[idx + 3];
         const packed = (r << 24) | (g << 16) | (b << 8) | a;
-        return palette.get(packed).i;
+        if (!packed && mask) {
+            return { color: 3, mask: true };
+        }
+        return { color: palette.get(packed).i, mask: false };
     }
 
     // Write a color (palette index) to the output buffer
@@ -281,10 +295,23 @@ The first occurrence of another color is at (${x}, ${y}) and has the value of (R
         bytes[idx] = (color << shift) | (bytes[idx] & (~mask));
     }
 
+    // Write a color (palette index) to the output buffer
+    function writeMask(mask, x, y) {
+        let idx, shift, mask;
+        idx = (y * png.width + x) >> 3;
+        shift = 7 - (x & 0x07);
+        mask = 1 << shift
+
+        maskBytes[idx] = maskBytes[idx] | mask;
+    }
+
     for (let y = 0; y < png.height; ++y) {
         for (let x = 0; x < png.width; ++x) {
-            const color = readColor(x, y);
+            const { color, mask } = readColor(x, y);
             writeColor(color, x, y);
+            if (hasMask) {
+                writeMask(mask, x, y);
+            }
         }
     }
 
@@ -301,6 +328,15 @@ The first occurrence of another color is at (${x}, ${y}) and has the value of (R
         .map((b) => "0x" + b.toString(16).padStart(2, "0"))
 
     const data = dataBytes.join(',')
+
+
+    const maskDataBytes = [...maskBytes]
+        .map((b) => "0x" + b.toString(16).padStart(2, "0"))
+
+    console.log(maskBytes.map(m => m.toString(2)).join(""))
+
+    const maskData = dataBytes.join(',')
+
 
     const wasmBytes = [...bytes]
         .map((b) => "\\" + b.toString(16).padStart(2, "0"))
@@ -328,6 +364,8 @@ The first occurrence of another color is at (${x}, ${y}) and has the value of (R
         "rustName": rustVarName,
         "odinName": odinVarName,
         "odinFlags": odinFlags,
+        "maskBytes": maskData,
+        "maskLength": maskBytes.length,
     };
 }
 
@@ -351,7 +389,7 @@ function runAll(files, opts) {
                 console.log();
             }
 
-            output.sprites.push(run(file));
+            output.sprites.push(run(file, opts.mask));
         } catch (error) {
             console.error("Error processing " + file + ": " + error.message);
             break;
